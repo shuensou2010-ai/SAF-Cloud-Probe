@@ -1,0 +1,58 @@
+name: SAF trusted cloud probe v1
+run-name: saf-probe:${{ inputs.dispatch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: Opaque host dispatch identity
+        required: true
+        type: string
+      request_digest:
+        description: Immutable host request SHA-256
+        required: true
+        type: string
+      baseline_sha:
+        description: Approved baseline SHA (data only, never checked out)
+        required: true
+        type: string
+
+# No repository token permissions; artifact upload uses runner artifact service.
+permissions: {}
+
+jobs:
+  fixed-probe:
+    if: startsWith(github.ref, 'refs/tags/saf-cloud-probe-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      # No checkout, repository scripts, packages, model calls or user commands.
+      - name: Produce fixed inert candidate
+        env:
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          REQUEST_DIGEST: ${{ inputs.request_digest }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, re
+          fields = {"dispatch_id": os.environ["DISPATCH_ID"],
+                    "request_digest": os.environ["REQUEST_DIGEST"],
+                    "baseline_sha": os.environ["BASELINE_SHA"]}
+          for key, length in (("dispatch_id", 32), ("request_digest", 64), ("baseline_sha", 40)):
+              if re.fullmatch("[0-9a-f]{" + str(length) + "}", fields[key]) is None:
+                  raise SystemExit("Invalid nonsecret probe binding")
+          content = b"Sebastian AI Factory trusted cloud probe v1\nNo AI code executed.\n"
+          output = pathlib.Path("probe-output")
+          output.mkdir()
+          (output / "candidate.txt").write_bytes(content)
+          fields.update(path="docs/cloud-bridge-probe.txt", size_bytes=len(content),
+                        sha256=hashlib.sha256(content).hexdigest())
+          (output / "receipt.json").write_text(json.dumps(fields, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+      - name: Upload only fixed probe bytes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: saf-probe-${{ inputs.dispatch_id }}
+          path: probe-output/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
